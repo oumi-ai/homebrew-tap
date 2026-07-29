@@ -2,7 +2,6 @@ class OumiCli < Formula
   desc "Command-line interface for the Oumi platform"
   homepage "https://github.com/oumi-ai/oumi-cli"
   version "0.5.0rc0"
-  # license "TODO" — oumi-cli has no LICENSE file yet; set this once decided.
 
   on_macos do
     on_arm do
