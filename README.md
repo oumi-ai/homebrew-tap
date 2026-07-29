@@ -4,7 +4,11 @@ Homebrew formulae for [Oumi](https://github.com/oumi-ai) tools.
 
 ## Install
 
+Homebrew 6.0.0+ requires third-party taps to be trusted before their formulae
+are installed. Trust the formula, then install:
+
 ```sh
+brew trust --formula oumi-ai/tap/oumi-cli
 brew install oumi-ai/tap/oumi-cli
 ```
 
@@ -12,6 +16,7 @@ Or tap once, then install by name:
 
 ```sh
 brew tap oumi-ai/tap
+brew trust --formula oumi-ai/tap/oumi-cli
 brew install oumi-cli
 ```
 
