@@ -1,6 +1,6 @@
 class OumiCli < Formula
   desc "Command-line interface for the Oumi platform"
-  homepage "https://github.com/oumi-ai/oumi-cli"
+  homepage "https://oumi.ai"
   version "0.5.0rc0"
 
   on_macos do
