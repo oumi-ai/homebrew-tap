@@ -1,0 +1,196 @@
+name: Update CLI formula
+
+# Updates the Homebrew formula from immutable, publicly readable release
+# artifacts and opens a PR. The archives are never executed in this job: a
+# downloaded binary should not have access to a write-capable GitHub token.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Released CLI version, e.g. 0.5.0 or 0.5.0rc1"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-cli-formula
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BUCKET_URL: https://oumi-public-downloads.s3.us-west-2.amazonaws.com
+      FORMULA: Formula/oumi-cli.rb
+    steps:
+      - name: Check out the tap
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # workflow_dispatch allows selecting a ref. Always generate the PR
+          # from the default branch so it cannot include unrelated commits.
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Validate the requested version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="${INPUT_VERSION#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.-]*$ ]]; then
+            echo "::error::Version must look like 0.5.0 or 0.5.0rc1 (an initial v is allowed)."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Download and verify every release artifact
+        id: artifacts
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          base="${BUCKET_URL}/cli/${VERSION}"
+          download_dir="${RUNNER_TEMP}/oumi-cli-${VERSION}"
+          mkdir -p "$download_dir"
+
+          assets=(
+            oumi-cli-macos-arm64.tar.gz
+            oumi-cli-linux-x86_64.tar.gz
+            oumi-cli-linux-arm64.tar.gz
+          )
+
+          for asset in "${assets[@]}"; do
+            curl --fail --show-error --silent --location --retry 3 --connect-timeout 15 \
+              --output "${download_dir}/${asset}" "${base}/${asset}"
+            curl --fail --show-error --silent --location --retry 3 --connect-timeout 15 \
+              --output "${download_dir}/${asset}.sha256" "${base}/${asset}.sha256"
+
+            expected="$(awk 'NR == 1 { print $1 }' "${download_dir}/${asset}.sha256")"
+            if [[ ! "$expected" =~ ^[0-9a-fA-F]{64}$ ]]; then
+              echo "::error::Invalid checksum file for ${asset}."
+              exit 1
+            fi
+            expected="${expected,,}"
+            actual="$(sha256sum "${download_dir}/${asset}" | awk '{ print $1 }')"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "::error::Checksum mismatch for ${asset}: expected ${expected}, got ${actual}."
+              exit 1
+            fi
+
+            case "$asset" in
+              oumi-cli-macos-arm64.tar.gz) output=macos_arm64_sha ;;
+              oumi-cli-linux-x86_64.tar.gz) output=linux_x86_64_sha ;;
+              oumi-cli-linux-arm64.tar.gz) output=linux_arm64_sha ;;
+            esac
+            echo "${output}=${expected}" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Update the formula
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          MACOS_ARM64_SHA: ${{ steps.artifacts.outputs.macos_arm64_sha }}
+          LINUX_X86_64_SHA: ${{ steps.artifacts.outputs.linux_x86_64_sha }}
+          LINUX_ARM64_SHA: ${{ steps.artifacts.outputs.linux_arm64_sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          formula = Path(os.environ["FORMULA"])
+          contents = formula.read_text()
+
+          contents, count = re.subn(
+              r'(?m)^  version "[^"]+"$',
+              f'  version "{os.environ["VERSION"]}"',
+              contents,
+          )
+          if count != 1:
+              raise SystemExit(f"expected one version declaration, found {count}")
+
+          checksums = {
+              "oumi-cli-macos-arm64.tar.gz": os.environ["MACOS_ARM64_SHA"],
+              "oumi-cli-linux-x86_64.tar.gz": os.environ["LINUX_X86_64_SHA"],
+              "oumi-cli-linux-arm64.tar.gz": os.environ["LINUX_ARM64_SHA"],
+          }
+          sha_declarations = re.findall(r'(?m)^\s+sha256\s+', contents)
+          if len(sha_declarations) != len(checksums):
+              raise SystemExit(
+                  "formula platform list has drifted: "
+                  f"expected {len(checksums)} sha256 declarations, "
+                  f"found {len(sha_declarations)}"
+              )
+
+          for asset, checksum in checksums.items():
+              pattern = re.compile(
+                  rf'(url "[^"]+/{re.escape(asset)}"\n\s+sha256 ")[0-9a-f]{{64}}(")'
+              )
+              contents, count = pattern.subn(rf"\g<1>{checksum}\2", contents)
+              if count != 1:
+                  raise SystemExit(
+                      f"expected one checksum declaration for {asset}, found {count}"
+                  )
+
+          formula.write_text(contents)
+          PY
+
+      - name: Validate the formula
+        run: |
+          set -euo pipefail
+          ruby -c "$FORMULA"
+          brew style "$FORMULA"
+
+          # Homebrew no longer audits formulae by file path. Copy the dirty
+          # checkout under Homebrew's tap directory, trust only this formula
+          # on the ephemeral runner, and audit the generated formula by name.
+          tap_dir="$(brew --repository)/Library/Taps/oumi-ai/homebrew-tap"
+          if [[ -e "$tap_dir" ]]; then
+            echo "::error::Unexpected pre-existing oumi-ai/tap checkout at ${tap_dir}."
+            exit 1
+          fi
+          mkdir -p "$(dirname "$tap_dir")"
+          cp -R "$GITHUB_WORKSPACE" "$tap_dir"
+          cd "$tap_dir"
+          brew trust --formula oumi-ai/tap/oumi-cli
+          brew audit --strict oumi-ai/tap/oumi-cli
+
+      - name: Open a pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- "$FORMULA"; then
+            echo "The formula already matches v${VERSION}. Nothing to do."
+            exit 0
+          fi
+
+          branch="cli-formula/v${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add "$FORMULA"
+          git commit -m "oumi-cli: update to v${VERSION}"
+
+          # Re-dispatches for the same version update the existing PR branch.
+          git fetch --depth 1 origin \
+            "+refs/heads/${branch}:refs/remotes/origin/${branch}" || true
+          git push --force-with-lease -u origin "$branch"
+
+          if [[ -n "$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')" ]]; then
+            echo "Updated the existing PR for ${branch}."
+            exit 0
+          fi
+
+          {
+            printf 'Updates the Homebrew formula to oumi-cli **v%s** using checksums verified against the public S3 release artifacts.\n\n' "$VERSION"
+            printf "Opened by \`.github/workflows/update-cli-formula.yml\`.\n"
+          } > "${RUNNER_TEMP}/pr-body.md"
+          gh pr create --base "${{ github.event.repository.default_branch }}" --head "$branch" \
+            --title "oumi-cli: update to v${VERSION}" \
+            --body-file "${RUNNER_TEMP}/pr-body.md"
