@@ -1,23 +1,23 @@
 class OumiCli < Formula
   desc "Command-line interface for the Oumi platform"
   homepage "https://oumi.ai"
-  version "0.5.0"
+  version "0.6.0"
 
   on_macos do
     on_arm do
       url "https://oumi-public-downloads.s3.us-west-2.amazonaws.com/cli/#{version}/oumi-cli-macos-arm64.tar.gz"
-      sha256 "0943b82225d325741e39f96baaef005f6d74e18d0053e3431957622441ce9695"
+      sha256 "f3b30780164dac990856bd2a41a268b8045c3bb52ec24690ceaf31127f20a7f0"
     end
   end
 
   on_linux do
     on_intel do
       url "https://oumi-public-downloads.s3.us-west-2.amazonaws.com/cli/#{version}/oumi-cli-linux-x86_64.tar.gz"
-      sha256 "255ea337d48f4217eab667bcec727c260ad63fa2f2767db15b40227449399f25"
+      sha256 "6af917fca478b626d1376b81811d038c1ec7f09b399abc31db01f685de6167c9"
     end
     on_arm do
       url "https://oumi-public-downloads.s3.us-west-2.amazonaws.com/cli/#{version}/oumi-cli-linux-arm64.tar.gz"
-      sha256 "1927cdc2a6267456e05fd7229fd9ee5b49b5cfe38a56a0c9a3f6523fabae6f9a"
+      sha256 "36b6be2b7ccfb37e08566004ee085b444d94b81c3243bf1661acfda6dbf1b644"
     end
   end
 
